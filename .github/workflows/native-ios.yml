@@ -1,0 +1,64 @@
+name: Unity iOS build
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: Check the macOS runner and Xcode toolchain
+        type: boolean
+        default: false
+      transfer_id:
+        description: Identifier of the private transfer
+        type: string
+        default: ''
+      archive_sha256:
+        description: SHA256 of the prepared input archive
+        type: string
+        default: ''
+      source_commit:
+        description: Commit pinned by the prepared input
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unity-ios-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 55
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      TRANSFER_ID: ${{ inputs.transfer_id }}
+      ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check Xcode and the iPhone device SDK
+        run: |
+          set -eu
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Fetch the private input
+        id: receive
+        if: ${{ !inputs.probe }}
+        env:
+          TRANSFER_REPO: ${{ secrets.TRANSFER_REPO }}
+          TRANSFER_KEY: ${{ secrets.TRANSFER_KEY }}
+        run: python3 worker.py receive
+      - name: Compile the native device app
+        if: ${{ !inputs.probe }}
+        run: python3 worker.py build
+      - name: Return the result to the private repository
+        if: always() && steps.receive.outcome == 'success'
+        env:
+          TRANSFER_REPO: ${{ secrets.TRANSFER_REPO }}
+          TRANSFER_KEY: ${{ secrets.TRANSFER_KEY }}
+        run: python3 worker.py send
